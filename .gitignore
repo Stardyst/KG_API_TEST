@@ -1,0 +1,22 @@
+# Runtime dependencies and generated caches
+node_modules/
+__pycache__/
+*.pyc
+
+# Large/local data assets
+25类事件/
+kg_source/
+neo4j/
+*.zip
+
+# Local run artifacts
+output/*
+!output/playwright/
+!output/playwright/*.js
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+
+# Local notes that may contain credentials
+备忘录.txt

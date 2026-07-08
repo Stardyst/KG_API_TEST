@@ -1,0 +1,12 @@
+{
+  "name": "kg-local-api",
+  "private": true,
+  "scripts": {
+    "build:nvl": "esbuild kg_api/static/vendor/nvl-preview-source.js --bundle --format=iife --global-name=KgNvlPreview --outfile=kg_api/static/vendor/nvl-preview.js"
+  },
+  "devDependencies": {
+    "@neo4j-nvl/base": "^1.2.0",
+    "esbuild": "^0.28.1",
+    "playwright": "^1.61.1"
+  }
+}

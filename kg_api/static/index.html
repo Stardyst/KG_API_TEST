@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>知识图谱本地测试接口</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>知识图谱本地测试接口</h1>
+        <p id="statusText">正在加载数据状态</p>
+      </div>
+      <div class="top-actions">
+        <button id="resetButton" type="button" class="secondary">重置</button>
+        <button id="downloadButton" type="button" class="primary">下载 JSON</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="query-panel">
+        <section class="section">
+          <label for="eventTypeSelect">事件类型</label>
+          <select id="eventTypeSelect"></select>
+        </section>
+
+        <section class="section">
+          <div class="section-title">
+            <span>筛选条件</span>
+            <button id="addFilterButton" type="button" class="text-button">添加条件</button>
+          </div>
+          <div id="filterRows" class="filter-rows"></div>
+        </section>
+
+        <section class="section">
+          <button id="queryButton" type="button" class="primary full">查询图谱</button>
+        </section>
+
+        <section class="section muted-box">
+          <div class="small-title">当前可筛选字段</div>
+          <div id="fieldList" class="tag-list"></div>
+        </section>
+      </aside>
+
+      <section class="result-panel">
+        <div class="metrics">
+          <div class="metric">
+            <span>命中事件</span>
+            <strong id="metricEvents">0</strong>
+          </div>
+          <div class="metric">
+            <span>节点</span>
+            <strong id="metricNodes">0</strong>
+          </div>
+          <div class="metric">
+            <span>关系</span>
+            <strong id="metricLinks">0</strong>
+          </div>
+          <div class="metric">
+            <span>事件类型</span>
+            <strong id="metricType">未选择</strong>
+          </div>
+        </div>
+
+        <nav class="tabs">
+          <button type="button" class="tab active" data-tab="graph">图谱预览</button>
+          <button type="button" class="tab" data-tab="json">JSON 预览</button>
+          <button type="button" class="tab" data-tab="events">命中事件</button>
+        </nav>
+
+        <div id="graphView" class="tab-view active">
+          <div id="graphCanvas" role="img" aria-label="图谱预览"></div>
+        </div>
+        <div id="jsonView" class="tab-view">
+          <pre id="jsonPreview">{}</pre>
+        </div>
+        <div id="eventsView" class="tab-view">
+          <div id="eventList" class="event-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/vendor/nvl-preview.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
