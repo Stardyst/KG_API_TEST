@@ -3,6 +3,7 @@ const state = {
   fields: [],
   lastQuery: null,
   lastResult: null,
+  lastResultKind: "query",
   candidateListSequence: 0,
 };
 
@@ -141,6 +142,7 @@ async function queryGraph() {
   try {
     const result = await apiPost("/api/知识图谱查询", query);
     state.lastResult = result;
+    state.lastResultKind = "query";
     renderResult(result);
   } catch (error) {
     alert(error.message);
@@ -157,6 +159,22 @@ function renderResult(result) {
   $("jsonPreview").textContent = JSON.stringify(result, null, 2);
   renderEvents(result["命中事件列表"] || []);
   renderGraph(result);
+}
+
+async function showBlacklistGraph() {
+  setBusy(true);
+  try {
+    const result = await fetch("/api/黑名单图谱").then((response) => response.json());
+    state.lastResult = result;
+    state.lastResultKind = "blacklist";
+    state.lastQuery = null;
+    renderResult(result);
+    activateTab("graph");
+  } catch (error) {
+    alert(error.message || "黑名单图谱加载失败");
+  } finally {
+    setBusy(false);
+  }
 }
 
 function renderEvents(events) {
@@ -443,6 +461,10 @@ function colorForOntName(name) {
 }
 
 async function downloadJson() {
+  if (state.lastResultKind === "blacklist" && state.lastResult) {
+    saveJsonBlob(state.lastResult, "违法船舶黑名单.json");
+    return;
+  }
   if (!state.lastQuery) {
     await queryGraph();
   }
@@ -452,17 +474,83 @@ async function downloadJson() {
     body: JSON.stringify(state.lastQuery),
   });
   const blob = await response.blob();
+  saveBlob(blob, `${state.lastQuery["事件类型"]}_查询结果.json`);
+}
+
+async function downloadFullGraph() {
+  await downloadWithProgress("/api/全量知识图谱下载", "完整知识图谱.json");
+}
+
+async function downloadBlacklist() {
+  await downloadWithProgress("/api/黑名单下载", "违法船舶黑名单.json");
+}
+
+async function downloadWithProgress(url, filename) {
+  setExportProgress(0, "准备导出");
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error("导出失败");
+  }
+  const total = Number(response.headers.get("Content-Length") || 0);
+  if (!response.body) {
+    const blob = await response.blob();
+    saveBlob(blob, filename);
+    setExportProgress(100, "导出完成");
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total) {
+      setExportProgress((received / total) * 100, `${formatBytes(received)} / ${formatBytes(total)}`);
+    } else {
+      setExportProgress(0, `已接收 ${formatBytes(received)}`);
+    }
+  }
+  saveBlob(new Blob(chunks, { type: "application/json;charset=utf-8" }), filename);
+  setExportProgress(100, "导出完成");
+}
+
+function setExportProgress(percent, text) {
+  const progress = $("exportProgress");
+  const bar = $("exportProgressBar");
+  const label = $("exportProgressText");
+  progress.hidden = false;
+  bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  label.textContent = text;
+}
+
+function saveJsonBlob(data, filename) {
+  saveBlob(new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }), filename);
+}
+
+function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${state.lastQuery["事件类型"]}_查询结果.json`;
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
 }
 
 function setBusy(isBusy) {
   $("queryButton").disabled = isBusy;
   $("downloadButton").disabled = isBusy;
+  $("fullExportButton").disabled = isBusy;
+  $("blacklistButton").disabled = isBusy;
+  $("blacklistDownloadButton").disabled = isBusy;
   $("queryButton").textContent = isBusy ? "查询中" : "查询图谱";
 }
 
@@ -482,18 +570,26 @@ function escapeSvg(value) {
   return escapeHtml(value).replaceAll("'", "&apos;");
 }
 
+function activateTab(tabName) {
+  document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === tabName));
+  document.querySelectorAll(".tab-view").forEach((item) => item.classList.remove("active"));
+  $(`${tabName}View`).classList.add("active");
+}
+
 document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-    document.querySelectorAll(".tab-view").forEach((item) => item.classList.remove("active"));
-    tab.classList.add("active");
-    $(`${tab.dataset.tab}View`).classList.add("active");
-  });
+  tab.addEventListener("click", () => activateTab(tab.dataset.tab));
 });
 
 $("addFilterButton").addEventListener("click", addFilterRow);
 $("queryButton").addEventListener("click", queryGraph);
 $("downloadButton").addEventListener("click", downloadJson);
+$("fullExportButton").addEventListener("click", () => {
+  downloadFullGraph().catch((error) => alert(error.message));
+});
+$("blacklistButton").addEventListener("click", showBlacklistGraph);
+$("blacklistDownloadButton").addEventListener("click", () => {
+  downloadBlacklist().catch((error) => alert(error.message));
+});
 $("resetButton").addEventListener("click", async () => {
   $("filterRows").innerHTML = "";
   addFilterRow();

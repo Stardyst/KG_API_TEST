@@ -99,6 +99,43 @@ async def graph_download(request: Request):
     )
 
 
+@app.get("/api/全量知识图谱下载")
+async def full_graph_download():
+    result = store.full_export()
+    payload = json.dumps(result, ensure_ascii=False, indent=2)
+    encoded_filename = quote("完整知识图谱.json")
+    return Response(
+        content=payload.encode("utf-8"),
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"full_static_graph.json\"; filename*=UTF-8''{encoded_filename}"
+            )
+        },
+    )
+
+
+@app.get("/api/黑名单图谱")
+async def blacklist_graph():
+    return store.blacklist_graph()
+
+
+@app.get("/api/黑名单下载")
+async def blacklist_download():
+    result = store.blacklist_graph()
+    payload = json.dumps(result, ensure_ascii=False, indent=2)
+    encoded_filename = quote("违法船舶黑名单.json")
+    return Response(
+        content=payload.encode("utf-8"),
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"ship_blacklist.json\"; filename*=UTF-8''{encoded_filename}"
+            )
+        },
+    )
+
+
 @app.get("/api/健康检查")
 async def health_check():
     return {
