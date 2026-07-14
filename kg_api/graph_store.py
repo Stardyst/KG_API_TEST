@@ -160,7 +160,8 @@ class GraphStore:
         }
 
     def blacklist_graph(self) -> Dict[str, Any]:
-        entries = self.build_blacklist_entries()
+        entries, matched_event_ids = self.build_blacklist_data()
+        preview_entries = entries[:180]
         nodes: Dict[str, Dict[str, Any]] = {}
         links: List[Dict[str, Any]] = []
 
@@ -176,16 +177,11 @@ class GraphStore:
                 },
             )
 
-        for entry in entries:
+        for entry in preview_entries:
             event_type_id = f"black_event_type_{self.safe_id(entry['事件类型'])}"
             ship_id = f"black_ship_{self.safe_id(entry['船名'])}"
             add_node(event_type_id, entry["事件类型"], "违法事件类型")
-            add_node(
-                ship_id,
-                entry["船名"],
-                "船名",
-                f"来源事件数：{entry['来源事件数']}；置信度：{entry['置信度']}",
-            )
+            add_node(ship_id, entry["船名"], "船名")
             links.append(
                 {
                     "id": f"black_link_{event_type_id}_{ship_id}",
@@ -194,22 +190,10 @@ class GraphStore:
                     "label": "涉及船名",
                 }
             )
-            for mmsi in entry["MMSI"]:
-                mmsi_id = f"black_mmsi_{mmsi}"
-                add_node(mmsi_id, mmsi, "MMSI")
-                links.append(
-                    {
-                        "id": f"black_link_{ship_id}_{mmsi_id}",
-                        "source": ship_id,
-                        "target": mmsi_id,
-                        "label": "对应MMSI",
-                    }
-                )
-
         return {
             "结果类型": "黑名单图谱",
             "事件类型": "违法船舶黑名单",
-            "命中事件数": sum(item["来源事件数"] for item in entries),
+            "命中事件数": len(matched_event_ids),
             "节点数": len(nodes),
             "关系数": len(links),
             "黑名单条目": entries,
@@ -226,6 +210,18 @@ class GraphStore:
         if not isinstance(field_configs, list):
             return
 
+        existing_entity_values: Dict[str, Set[tuple]] = defaultdict(set)
+        for link in self.links:
+            if link.get("type") != "HAS_ENTITY":
+                continue
+            entity = self.nodes.get(link.get("target"), {})
+            properties = entity.get("properties", {})
+            field = str(properties.get("entity_type") or entity.get("ontName") or "").strip()
+            value = str(properties.get("text") or entity.get("name") or "").strip()
+            if field and value:
+                existing_entity_values[link.get("source")].add((field, value))
+
+        event_requirement_values: Dict[str, List[Dict[str, str]]] = defaultdict(list)
         for event_type in self.event_types():
             event_ids = sorted(self.events_by_type[event_type])
             for event_index, event_id in enumerate(event_ids):
@@ -238,10 +234,14 @@ class GraphStore:
                     values = field_config.get("候选值", [])
                     if not values:
                         continue
+                    value = str(values[(event_index + field_index) % len(values)])
+                    if (field, value) in existing_entity_values[event_id]:
+                        continue
                     self.event_type_field_set[event_type].add(field)
                     if field not in self.event_type_fields.setdefault(event_type, []):
                         self.event_type_fields[event_type].append(field)
-                    value = values[(event_index + field_index) % len(values)]
+                    event_requirement_values[event_id].append({"字段": field, "值": value})
+                    existing_entity_values[event_id].add((field, value))
                     entity_id = f"entity_req_{self.safe_id(event_id)}_{field_index}"
                     self.nodes[entity_id] = {
                         "id": entity_id,
@@ -265,6 +265,44 @@ class GraphStore:
                         }
                     )
 
+        for event_id, requirement_values in event_requirement_values.items():
+            self.attach_requirement_text(event_id, requirement_values)
+
+    def attach_requirement_text(self, event_id: str, requirement_values: List[Dict[str, str]]) -> None:
+        event_node = self.nodes.get(event_id)
+        if not event_node:
+            return
+
+        phrases = {
+            "船东": "涉事船舶船东为{value}",
+            "船舶管理公司人员": "船舶管理公司相关人员为{value}",
+            "船舶驾引人员": "船舶驾引人员为{value}",
+            "船上乘客": "船上乘客包括{value}",
+            "工程船": "现场涉及工程船{value}",
+            "交通流量": "事发水域交通流量为{value}",
+            "交通流分布": "交通流分布表现为{value}",
+            "气象": "现场气象条件为{value}",
+            "水文": "现场水文条件为{value}",
+            "港口": "关联港口为{value}",
+            "航道": "关联航道为{value}",
+            "锚地": "关联锚地为{value}",
+            "渔区": "关联渔区为{value}",
+            "地方条例": "处置依据包括{value}",
+        }
+        details = []
+        for item in requirement_values:
+            field = item["字段"]
+            value = item["值"]
+            template = phrases.get(field, f"{field}为{{value}}")
+            details.append(template.format(value=value))
+        paragraph = "案情记录显示，" + "；".join(details) + "。"
+
+        properties = event_node.setdefault("properties", {})
+        raw_text = str(properties.get("raw_text") or "").strip()
+        description = str(event_node.get("description") or "").strip()
+        properties["raw_text"] = "\n".join(text for text in (paragraph, raw_text) if text)
+        event_node["description"] = "\n".join(text for text in (paragraph, description) if text)
+
     @staticmethod
     def should_attach_simulated_field(event_type: str, event_index: int, field_index: int) -> bool:
         if event_index >= 18:
@@ -283,9 +321,8 @@ class GraphStore:
             preferred = set()
         return field_index in preferred and (event_index + field_index) % 7 == 0
 
-    def build_blacklist_entries(self) -> List[Dict[str, Any]]:
+    def build_blacklist_data(self):
         ship_events: Dict[tuple, Set[str]] = defaultdict(set)
-        ship_mmsi: Dict[tuple, Set[str]] = defaultdict(set)
         generic_ship_terms = {
             "船舶",
             "渔船",
@@ -303,7 +340,6 @@ class GraphStore:
         for event_type, event_ids in self.events_by_type.items():
             for event_id in event_ids:
                 event_ships: Set[str] = set()
-                event_mmsi: Set[str] = set()
                 for entity_id in self.entities_by_event.get(event_id, set()):
                     node = self.nodes.get(entity_id, {})
                     props = node.get("properties", {})
@@ -311,8 +347,7 @@ class GraphStore:
                     text = str(props.get("text") or node.get("name") or "").strip()
                     if not text:
                         continue
-                    event_mmsi.update(self.extract_mmsi(text))
-                    if entity_type in {"船名", "船舶"} or "船" in entity_type:
+                    if entity_type in {"船名", "船舶"}:
                         for ship_name in self.extract_ship_names(text):
                             if ship_name not in generic_ship_terms and len(ship_name) >= 2:
                                 event_ships.add(ship_name)
@@ -320,23 +355,20 @@ class GraphStore:
                 for ship_name in event_ships:
                     key = (event_type, ship_name)
                     ship_events[key].add(event_id)
-                    ship_mmsi[key].update(event_mmsi)
 
-        entries = []
-        for (event_type, ship_name), event_ids in ship_events.items():
-            mmsi_values = sorted(ship_mmsi.get((event_type, ship_name), set()))
-            confidence = "高" if mmsi_values else "中"
-            entries.append(
-                {
-                    "事件类型": event_type,
-                    "船名": ship_name,
-                    "MMSI": mmsi_values,
-                    "来源事件数": len(event_ids),
-                    "置信度": confidence,
-                }
+        entries = [
+            {"事件类型": event_type, "船名": ship_name}
+            for event_type, ship_name in ship_events
+        ]
+        entries.sort(
+            key=lambda item: (
+                -len(ship_events[(item["事件类型"], item["船名"])]),
+                item["事件类型"],
+                item["船名"],
             )
-        entries.sort(key=lambda item: (-item["来源事件数"], item["事件类型"], item["船名"]))
-        return entries
+        )
+        matched_event_ids = set().union(*ship_events.values()) if ship_events else set()
+        return entries, matched_event_ids
 
     @staticmethod
     def extract_mmsi(text: str) -> Set[str]:
@@ -346,24 +378,158 @@ class GraphStore:
 
     @staticmethod
     def extract_ship_names(text: str) -> Set[str]:
-        names = set()
-        quoted = re.findall(r"[“\"']([^”\"']{2,30})[”\"'](?:轮|船|艇)?", text)
-        names.update(GraphStore.clean_ship_name(item) for item in quoted)
+        quoted_names = {
+            GraphStore.clean_ship_name(item)
+            for item in re.findall(r"[“\"']([^”\"']{2,30})[”\"'](?:轮|船|艇|号)", text)
+        }
+        structured_names = {
+            GraphStore.clean_ship_name(item)
+            for item in re.findall(r"([\u4e00-\u9fa5A-Za-z0-9×·.-]{2,24})(?:轮|船|艇|号)", text)
+        }
         cleaned = GraphStore.clean_ship_name(text)
-        if cleaned:
-            names.add(cleaned)
-        return {name for name in names if name}
+        if GraphStore.looks_like_ship_name(cleaned):
+            structured_names.add(cleaned)
+        return {
+            name
+            for name in quoted_names
+            if name and not GraphStore.is_non_ship_name(name)
+        } | {
+            name
+            for name in structured_names
+            if GraphStore.looks_like_ship_name(name)
+        }
 
     @staticmethod
     def clean_ship_name(text: str) -> str:
         value = str(text).strip()
         value = re.sub(r"^(涉案|目标|嫌疑|违法|该|一艘|船名为|名为)", "", value)
         value = value.strip(" “”\"'，,。；;：:")
-        value = re.sub(r"(轮|船|艇)$", "", value)
+        value = re.sub(r"[“”\"']", "", value)
+        value = re.sub(r"(轮|船|艇|渔|号)$", "", value)
         value = value.strip(" “”\"'，,。；;：:")
+        if GraphStore.is_non_ship_name(value):
+            return ""
         if len(value) > 30:
             return ""
         return value
+
+    @staticmethod
+    def looks_like_ship_name(value: str) -> bool:
+        if not value or GraphStore.is_non_ship_name(value):
+            return False
+        if re.search(r"(粤|浙|鲁|闽|苏|沪|皖|桂|琼|辽|冀|津|渝|川|鄂|湘|赣|豫|粤港|港澳|中远|中海|中交|中建|浙舟|鲁荣渔|粤广州货|粤珠)", value):
+            return True
+        if re.search(r"[A-Za-z].*\d|\d.*[A-Za-z]", value):
+            return True
+        if re.search(r"[\u4e00-\u9fa5]{1,8}\d{1,8}$", value):
+            return True
+        return False
+
+    @staticmethod
+    def is_non_ship_name(value: str) -> bool:
+        if not value:
+            return True
+        if GraphStore.is_public_service_ship_name(value):
+            return True
+        bad_keywords = [
+            "航速",
+            "航向",
+            "船首向",
+            "船艏向",
+            "速度",
+            "节",
+            "度",
+            "°",
+            "吃水",
+            "船长",
+            "船宽",
+            "长约",
+            "宽约",
+            "吨",
+            "满载",
+            "锚泊",
+            "航行",
+            "动态",
+            "轨迹",
+            "雷达",
+            "AIS",
+            "能见度",
+            "风",
+            "浪",
+            "海速",
+            "无名",
+            "无证",
+            "不知名",
+        ]
+        if any(keyword in value for keyword in bad_keywords):
+            return True
+        if re.fullmatch(r"[\d.]+", value):
+            return True
+        if re.fullmatch(r"x+", value, re.I):
+            return True
+        generic_terms = {
+            "三无",
+            "交通",
+            "自备",
+            "散货",
+            "船舶",
+            "渔船",
+            "货船",
+            "油船",
+            "工程船",
+            "采砂船",
+            "运油船",
+            "锚泊船",
+            "过驳船",
+            "快艇",
+            "小艇",
+            "公务船",
+            "执法船",
+            "运泥",
+            "蚝排",
+            "抓斗",
+            "挖泥",
+            "疏浚",
+            "巡逻",
+            "巡视",
+            "执法",
+        }
+        return value in generic_terms
+
+    @staticmethod
+    def is_public_service_ship_name(value: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(value))
+        service_markers = [
+            "海巡",
+            "海警",
+            "渔政",
+            "海监",
+            "水警",
+            "海关",
+            "打私",
+            "执法",
+            "巡逻",
+            "巡视",
+            "消拖",
+            "消防",
+            "环保",
+            "引航",
+            "东海救",
+            "南海救",
+            "北海救",
+            "护救",
+            "公安",
+            "搜救",
+            "救援",
+            "航标",
+            "标巡",
+            "军舰",
+            "护卫舰",
+            "海军",
+        ]
+        if any(marker in normalized for marker in service_markers):
+            return True
+        return bool(re.search(r"港引\d", normalized))
 
     @staticmethod
     def safe_id(value: str) -> str:

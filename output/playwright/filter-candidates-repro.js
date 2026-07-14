@@ -9,7 +9,8 @@ async function main() {
   const errors = [];
   let candidateRequestCount = 0;
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+    const text = message.text();
+    if (message.type() === "error" && !text.includes("status of 404")) errors.push(text);
   });
   page.on("request", (request) => {
     if (decodeURI(request.url()).includes("/api/字段候选值")) candidateRequestCount += 1;
@@ -63,61 +64,76 @@ async function main() {
   await page.selectOption(".filter-row .filter-field", scenario.firstField);
   await page.waitForFunction(
     (expected) => {
-      const input = document.querySelector(".filter-row .filter-value");
-      const datalist = document.getElementById(input.getAttribute("list"));
-      return Array.from(datalist?.querySelectorAll("option") || []).some((option) => option.value === expected);
+      const menu = document.querySelector(".filter-row .filter-candidate-menu");
+      return Array.from(menu?.querySelectorAll(".filter-candidate-option") || []).some(
+        (option) => option.dataset.value === expected
+      );
     },
     scenario.firstValue,
     { timeout: 30000 }
   );
 
   await page.fill(".filter-row .filter-value", scenario.firstValue);
+  const requestCountBeforeQuery = candidateRequestCount;
+  await page.click("#queryButton");
+  await page.waitForFunction(() => {
+    const button = document.querySelector("#queryButton");
+    return button && !button.disabled && button.textContent === "查询图谱";
+  });
+  const requestCountAfterQuery = candidateRequestCount;
+  const requestCountBeforePostQuerySwitch = candidateRequestCount;
   await page.selectOption(".filter-row .filter-field", scenario.secondField);
   await page.waitForFunction(
     (expected) => {
-      const input = document.querySelector(".filter-row .filter-value");
-      const datalist = document.getElementById(input.getAttribute("list"));
-      return Array.from(datalist?.querySelectorAll("option") || []).some((option) => option.value === expected);
+      const menu = document.querySelector(".filter-row .filter-candidate-menu");
+      return Array.from(menu?.querySelectorAll(".filter-candidate-option") || []).some(
+        (option) => option.dataset.value === expected
+      );
     },
     scenario.secondValue,
     { timeout: 30000 }
   );
+  const requestCountAfterPostQuerySwitch = candidateRequestCount;
 
   const requestCountBeforeFocus = candidateRequestCount;
   await page.click(".filter-row .filter-value");
-  await page.click("body", { position: { x: 20, y: 20 } });
-  await page.click(".filter-row .filter-value");
-  await page.waitForTimeout(500);
+  await page.waitForSelector(".filter-candidate-menu:not([hidden])", { timeout: 30000 });
+  await page.waitForTimeout(200);
   const requestCountAfterFocus = candidateRequestCount;
   const result = await page.evaluate((expectedSecondValue) => {
     const input = document.querySelector(".filter-row .filter-value");
-    const listId = input.getAttribute("list");
-    const datalist = document.getElementById(listId);
-    const options = Array.from(datalist?.querySelectorAll("option") || []).map((option) => option.value);
+    const menus = Array.from(document.querySelectorAll(".filter-candidate-menu:not([hidden])"));
+    const options = Array.from(menus[0]?.querySelectorAll(".filter-candidate-option") || []).map(
+      (option) => option.dataset.value
+    );
     return {
-      listId,
-      hasRowScopedDatalist: listId !== "candidateList" && Boolean(datalist),
+      visibleCandidateMenus: menus.length,
       inputValue: input.value,
       inputCleared: input.value === "",
       candidateUpdated: options.includes(expectedSecondValue),
       optionCount: options.length,
     };
   }, scenario.secondValue);
+  await page.locator(".filter-candidate-option").filter({ hasText: scenario.secondValue }).first().click();
+  const selectionResult = await page.evaluate((expectedSecondValue) => ({
+    candidateSelected: document.querySelector(".filter-row .filter-value")?.value === expectedSecondValue,
+    menuClosedAfterSelection: document.querySelector(".filter-row .filter-candidate-menu")?.hidden === true,
+  }), scenario.secondValue);
 
   await page.selectOption(".filter-row .filter-field", scenario.firstField);
   await page.waitForFunction(
     (expected) => {
       const input = document.querySelector(".filter-row .filter-value");
-      const datalist = document.getElementById(input.getAttribute("list"));
-      return input.value === "" && Array.from(datalist?.querySelectorAll("option") || []).some((option) => option.value === expected);
+      const menu = document.querySelector(".filter-row .filter-candidate-menu");
+      return input.value === "" && Array.from(menu?.querySelectorAll(".filter-candidate-option") || []).some((option) => option.dataset.value === expected);
     },
     scenario.firstValue,
     { timeout: 30000 }
   );
   const switchedBack = await page.evaluate((expectedFirstValue) => {
     const input = document.querySelector(".filter-row .filter-value");
-    const datalist = document.getElementById(input.getAttribute("list"));
-    const options = Array.from(datalist?.querySelectorAll("option") || []).map((option) => option.value);
+    const menu = document.querySelector(".filter-row .filter-candidate-menu");
+    const options = Array.from(menu?.querySelectorAll(".filter-candidate-option") || []).map((option) => option.dataset.value);
     return input.value === "" && options.includes(expectedFirstValue);
   }, scenario.firstValue);
 
@@ -126,8 +142,11 @@ async function main() {
       {
         scenario,
         ...result,
+        ...selectionResult,
         focusDidNotReloadCandidates: requestCountAfterFocus === requestCountBeforeFocus,
         switchedBack,
+        queryDidNotReloadCandidates: requestCountAfterQuery === requestCountBeforeQuery,
+        postQuerySwitchRequestCount: requestCountAfterPostQuerySwitch - requestCountBeforePostQuerySwitch,
         requestCountBeforeFocus,
         requestCountAfterFocus,
         errors,
@@ -136,6 +155,25 @@ async function main() {
       2
     )
   );
+  if (errors.length) {
+    throw new Error(`页面控制台存在错误：${errors.join("; ")}`);
+  }
+  if (
+    result.visibleCandidateMenus !== 1 ||
+    !result.inputCleared ||
+    !result.candidateUpdated ||
+    !selectionResult.candidateSelected ||
+    !selectionResult.menuClosedAfterSelection ||
+    !switchedBack
+  ) {
+    throw new Error("筛选条件切换后，筛选值候选列表没有按当前字段刷新。");
+  }
+  if (requestCountAfterFocus !== requestCountBeforeFocus) {
+    throw new Error("点击筛选值输入框不应再次请求候选值，当前可能导致候选框重复弹出。");
+  }
+  if (requestCountAfterQuery !== requestCountBeforeQuery || requestCountAfterPostQuerySwitch - requestCountBeforePostQuerySwitch !== 1) {
+    throw new Error("查询图谱后切换筛选字段时，候选值没有保持单次刷新。");
+  }
   await browser.close();
 }
 

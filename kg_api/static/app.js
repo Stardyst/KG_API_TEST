@@ -4,7 +4,6 @@ const state = {
   lastQuery: null,
   lastResult: null,
   lastResultKind: "query",
-  candidateListSequence: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -51,17 +50,18 @@ function renderFieldList() {
 function addFilterRow() {
   const container = $("filterRows");
   const row = document.createElement("div");
-  const datalistId = `candidateList-${++state.candidateListSequence}`;
   row.className = "filter-row";
   row.innerHTML = `
     <select class="filter-field">
       ${state.fields.map((field) => `<option value="${escapeHtml(field)}">${escapeHtml(field)}</option>`).join("")}
     </select>
     <div class="filter-row-actions">
-      <input class="filter-value" list="${datalistId}" placeholder="输入筛选值，支持包含匹配" />
+      <div class="filter-value-control">
+        <input class="filter-value" autocomplete="off" placeholder="输入筛选值，支持包含匹配" />
+        <div class="filter-candidate-menu" role="listbox" hidden></div>
+      </div>
       <button type="button" class="remove-filter">删除</button>
     </div>
-    <datalist id="${datalistId}"></datalist>
   `;
   const fieldSelect = row.querySelector(".filter-field");
   const valueInput = row.querySelector(".filter-value");
@@ -69,11 +69,15 @@ function addFilterRow() {
     valueInput.value = "";
     await refreshCandidatesForRow(row);
   });
-  valueInput.addEventListener("pointerdown", () => {
-    refreshCandidatesForRow(row, { force: false });
-  });
-  valueInput.addEventListener("focus", () => {
-    refreshCandidatesForRow(row, { force: false });
+  valueInput.addEventListener("focus", () => showCandidateMenu(row));
+  valueInput.addEventListener("input", () => showCandidateMenu(row));
+  valueInput.addEventListener("keydown", (event) => handleCandidateKeydown(event, row));
+  row.querySelector(".filter-candidate-menu").addEventListener("mousedown", (event) => {
+    const option = event.target.closest(".filter-candidate-option");
+    if (!option) return;
+    event.preventDefault();
+    valueInput.value = option.dataset.value || "";
+    hideCandidateMenu(row);
   });
   row.querySelector(".remove-filter").addEventListener("click", () => {
     row.remove();
@@ -97,6 +101,7 @@ async function refreshCandidatesForRow(row, options = {}) {
   const requestToken = `${Date.now()}-${Math.random()}`;
   row.dataset.candidateRequestToken = requestToken;
   row.dataset.loadingCandidateField = field;
+  row.candidateValues = [];
   if (valueInput) {
     valueInput.placeholder = "正在加载候选值";
   }
@@ -128,12 +133,48 @@ function isLatestCandidateRequest(row, requestToken, eventType) {
 }
 
 function renderCandidatesForRow(row, values) {
-  const listId = row.querySelector(".filter-value")?.getAttribute("list");
-  const datalist = listId ? document.getElementById(listId) : null;
-  if (!datalist) return;
-  datalist.innerHTML = values
-    .map((item) => `<option value="${escapeHtml(item["值"])}">${escapeHtml(String(item["命中次数"]))}</option>`)
+  const menu = row.querySelector(".filter-candidate-menu");
+  const input = row.querySelector(".filter-value");
+  if (!menu || !input) return;
+  row.candidateValues = values;
+  const keyword = input.value.trim().toLowerCase();
+  const visibleValues = values.filter((item) => String(item["值"]).toLowerCase().includes(keyword));
+  menu.innerHTML = visibleValues
+    .map(
+      (item) => `
+        <button type="button" class="filter-candidate-option" role="option" data-value="${escapeHtml(item["值"])}">
+          <span>${escapeHtml(item["值"])}</span>
+          <span class="filter-candidate-count">${escapeHtml(String(item["命中次数"]))}</span>
+        </button>
+      `
+    )
     .join("");
+  if (!visibleValues.length) menu.hidden = true;
+}
+
+function showCandidateMenu(row) {
+  renderCandidatesForRow(row, row.candidateValues || []);
+  const menu = row.querySelector(".filter-candidate-menu");
+  if (menu?.children.length) menu.hidden = false;
+}
+
+function hideCandidateMenu(row) {
+  const menu = row.querySelector(".filter-candidate-menu");
+  if (menu) menu.hidden = true;
+}
+
+function handleCandidateKeydown(event, row) {
+  const menu = row.querySelector(".filter-candidate-menu");
+  const options = Array.from(menu?.querySelectorAll(".filter-candidate-option") || []);
+  if (event.key === "Escape") {
+    hideCandidateMenu(row);
+    return;
+  }
+  if (event.key === "Enter" && !menu?.hidden && options.length) {
+    event.preventDefault();
+    row.querySelector(".filter-value").value = options[0].dataset.value || "";
+    hideCandidateMenu(row);
+  }
 }
 
 function collectFilters() {
@@ -177,9 +218,29 @@ function renderResult(result) {
   $("metricNodes").textContent = result["节点数"];
   $("metricLinks").textContent = result["关系数"];
   $("metricType").textContent = result["事件类型"];
-  $("jsonPreview").textContent = JSON.stringify(result, null, 2);
+  $("jsonPreview").textContent = JSON.stringify(buildJsonPreview(result), null, 2);
   renderEvents(result["命中事件列表"] || []);
   renderGraph(result);
+}
+
+function buildJsonPreview(result) {
+  const preview = { ...result };
+  const maxNodes = 120;
+  const maxLinks = 220;
+  const maxEntries = 200;
+  if (Array.isArray(result.staticNodes) && result.staticNodes.length > maxNodes) {
+    preview.staticNodes = result.staticNodes.slice(0, maxNodes);
+    preview["JSON预览说明"] = `页面仅预览前 ${maxNodes} 个节点、前 ${maxLinks} 条关系；下载 JSON 仍包含完整数据。`;
+  }
+  if (Array.isArray(result.staticLinks) && result.staticLinks.length > maxLinks) {
+    preview.staticLinks = result.staticLinks.slice(0, maxLinks);
+    preview["JSON预览说明"] = preview["JSON预览说明"] || `页面仅预览前 ${maxNodes} 个节点、前 ${maxLinks} 条关系；下载 JSON 仍包含完整数据。`;
+  }
+  if (Array.isArray(result["黑名单条目"]) && result["黑名单条目"].length > maxEntries) {
+    preview["黑名单条目"] = result["黑名单条目"].slice(0, maxEntries);
+    preview["黑名单预览说明"] = `页面仅预览前 ${maxEntries} 条黑名单；导出 JSON 仍包含完整条目。`;
+  }
+  return preview;
 }
 
 async function showBlacklistGraph() {
@@ -231,8 +292,8 @@ function renderGraph(result) {
   }
 
   const preview = window.KgNvlPreview.render(canvas, result, {
-    maxNodes: canvas.clientWidth < 620 ? 220 : 320,
-    maxLinks: canvas.clientWidth < 620 ? 380 : 620,
+    maxNodes: canvas.clientWidth < 620 ? 160 : 240,
+    maxLinks: canvas.clientWidth < 620 ? 260 : 420,
     onNodeSelect: (node, degree) => showGraphDetail(detail, { ...node, degree }),
   });
   const info = ensureGraphInfo();
@@ -615,6 +676,11 @@ $("resetButton").addEventListener("click", async () => {
   $("filterRows").innerHTML = "";
   addFilterRow();
   await queryGraph();
+});
+document.addEventListener("click", (event) => {
+  document.querySelectorAll(".filter-row").forEach((row) => {
+    if (!row.contains(event.target)) hideCandidateMenu(row);
+  });
 });
 
 loadInitialData().catch((error) => {

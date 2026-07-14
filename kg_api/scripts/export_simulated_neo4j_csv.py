@@ -1,10 +1,13 @@
 import csv
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 from kg_api.graph_store import GraphStore
 
 
-ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "output" / "simulated_neo4j_import"
 
 
@@ -13,6 +16,7 @@ def main() -> None:
     store.load()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    events_path = OUT_DIR / "simulated_events.csv"
     nodes_path = OUT_DIR / "simulated_nodes.csv"
     rels_path = OUT_DIR / "simulated_relationships.csv"
     cypher_path = OUT_DIR / "simulated_import.cypher"
@@ -21,6 +25,40 @@ def main() -> None:
     simulated_nodes = [node for node in store.nodes.values() if str(node.get("id", "")).startswith("entity_req_")]
     simulated_ids = {node["id"] for node in simulated_nodes}
     simulated_rels = [link for link in store.links if link.get("target") in simulated_ids]
+    simulated_event_ids = sorted({link["source"] for link in simulated_rels})
+    simulated_events = [store.nodes[event_id] for event_id in simulated_event_ids]
+
+    with events_path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=[
+                "id:ID",
+                "name",
+                "event_type",
+                "folder_name",
+                "local_task_id",
+                "source_file",
+                "raw_text",
+                "description",
+                ":LABEL",
+            ],
+        )
+        writer.writeheader()
+        for node in simulated_events:
+            properties = node.get("properties", {})
+            writer.writerow(
+                {
+                    "id:ID": node.get("id", ""),
+                    "name": node.get("name", ""),
+                    "event_type": properties.get("event_type", ""),
+                    "folder_name": properties.get("folder_name", ""),
+                    "local_task_id": properties.get("local_task_id", ""),
+                    "source_file": properties.get("source_file", ""),
+                    "raw_text": properties.get("raw_text", ""),
+                    "description": node.get("description", ""),
+                    ":LABEL": "Event",
+                }
+            )
 
     with nodes_path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=["id:ID", "name", "ontName", "description", ":LABEL"])
@@ -53,6 +91,13 @@ def main() -> None:
         "\n".join(
             [
                 "// 在 Neo4j Browser 中执行前，请将 CSV 文件放入 Neo4j import 目录。",
+                "LOAD CSV WITH HEADERS FROM 'file:///simulated_events.csv' AS row",
+                "MATCH (event:Event {id: row.`id:ID`})",
+                "SET event.name = row.name, event.event_type = row.event_type,",
+                "    event.folder_name = row.folder_name, event.local_task_id = row.local_task_id,",
+                "    event.source_file = row.source_file, event.raw_text = row.raw_text,",
+                "    event.description = row.description;",
+                "",
                 "LOAD CSV WITH HEADERS FROM 'file:///simulated_nodes.csv' AS row",
                 "MERGE (n:Entity {id: row.`id:ID`})",
                 "SET n.name = row.name, n.ontName = row.ontName, n.description = row.description;",
@@ -77,12 +122,14 @@ def main() -> None:
                 "",
                 "文件：",
                 "",
+                "- `simulated_events.csv`：需要更新文本的现有事件节点。",
                 "- `simulated_nodes.csv`：补充实体节点。",
                 "- `simulated_relationships.csv`：现有事件节点到补充实体节点的 `HAS_ENTITY` 关系。",
                 "- `simulated_import.cypher`：Neo4j Browser 导入语句。",
                 "",
-                "注意：关系 CSV 的 `:START_ID` 使用现有图谱中的事件节点 ID。导入关系前，Neo4j 中必须已经存在这些事件节点。",
+                "注意：事件 CSV 通过事件 ID 匹配已有 `Event` 节点，只更新属性，不创建新的事件节点。",
                 "",
+                f"事件数：{len(simulated_events)}",
                 f"节点数：{len(simulated_nodes)}",
                 f"关系数：{len(simulated_rels)}",
                 "",
@@ -91,7 +138,10 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print(f"nodes={len(simulated_nodes)} relationships={len(simulated_rels)} output={OUT_DIR}")
+    print(
+        f"events={len(simulated_events)} nodes={len(simulated_nodes)} "
+        f"relationships={len(simulated_rels)} output={OUT_DIR}"
+    )
 
 
 if __name__ == "__main__":

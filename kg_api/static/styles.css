@@ -210,6 +210,56 @@ input:focus {
   gap: 8px;
 }
 
+.filter-value-control {
+  position: relative;
+  min-width: 0;
+}
+
+.filter-candidate-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+}
+
+.filter-candidate-menu[hidden] {
+  display: none;
+}
+
+.filter-candidate-option {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+}
+
+.filter-candidate-option:hover,
+.filter-candidate-option:focus-visible {
+  background: var(--soft);
+}
+
+.filter-candidate-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .remove-filter {
   background: #fff;
   color: var(--danger);
