@@ -235,14 +235,16 @@ class GraphStore:
                 if field not in self.event_type_fields.setdefault(event_type, []):
                     self.event_type_fields[event_type].append(field)
 
-            event_ids = sorted(self.events_by_type[event_type])[:24]
+            event_ids = sorted(self.events_by_type[event_type])
             for event_index, event_id in enumerate(event_ids):
                 for field_index, field_config in enumerate(field_configs):
+                    if not self.should_attach_simulated_field(event_type, event_index, field_index):
+                        continue
                     values = field_config.get("候选值", [])
                     if not values:
                         continue
                     value = values[(event_index + field_index) % len(values)]
-                    entity_id = f"sim_{self.safe_id(event_id)}_{field_index}"
+                    entity_id = f"entity_req_{self.safe_id(event_id)}_{field_index}"
                     self.nodes[entity_id] = {
                         "id": entity_id,
                         "name": value,
@@ -257,13 +259,31 @@ class GraphStore:
                     }
                     self.links.append(
                         {
-                            "id": f"sim_link_{self.safe_id(event_id)}_{field_index}",
+                            "id": f"rel_req_{self.safe_id(event_id)}_{field_index}",
                             "source": event_id,
                             "target": entity_id,
                             "type": "HAS_ENTITY",
                             "label": "包含实体",
                         }
                     )
+
+    @staticmethod
+    def should_attach_simulated_field(event_type: str, event_index: int, field_index: int) -> bool:
+        if event_index >= 18:
+            return False
+        if "碰撞" in event_type:
+            preferred = {6, 7, 8, 9, 10, 11, 12}
+        elif "采砂" in event_type or "倾废" in event_type:
+            preferred = {4, 8, 9, 10, 11, 13}
+        elif "驻留" in event_type or "停泊" in event_type or "抛锚" in event_type:
+            preferred = {7, 8, 9, 10, 11, 12, 13}
+        elif "走私" in event_type or "偷渡" in event_type or "搭靠" in event_type:
+            preferred = {0, 1, 2, 3, 5, 10, 13}
+        elif "超速" in event_type or "徘徊" in event_type or "入侵" in event_type:
+            preferred = {6, 7, 8, 9, 10, 11}
+        else:
+            preferred = set(range(14))
+        return field_index in preferred and (event_index + field_index) % 7 == 0
 
     def build_blacklist_entries(self) -> List[Dict[str, Any]]:
         ship_events: Dict[tuple, Set[str]] = defaultdict(set)

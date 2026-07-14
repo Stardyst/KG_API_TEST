@@ -57,6 +57,11 @@ p {
   justify-content: flex-end;
 }
 
+.tool-actions {
+  display: grid;
+  gap: 8px;
+}
+
 .export-progress {
   position: absolute;
   right: 24px;
