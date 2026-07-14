@@ -28,11 +28,19 @@ async function main() {
       return response.json();
     }
 
-    const fields = await post("/api/可筛选字段", { "事件类型": "偷渡" });
-    const candidates = await post("/api/字段候选值", { "事件类型": "偷渡", "字段": "交通流量" });
+    const requiredFields = ["船东", "船舶管理公司人员", "船舶驾引人员", "船上乘客", "工程船", "交通流量", "交通流分布", "气象", "水文", "港口", "航道", "锚地", "渔区", "地方条例"];
+    const allTypes = (await post("/api/事件类型列表"))["事件类型列表"];
+    const fieldLists = [];
+    for (const eventType of allTypes) {
+      const fields = await post("/api/可筛选字段", { "事件类型": eventType });
+      fieldLists.push({ eventType, fields: fields["可筛选字段"] });
+    }
+    const carrier = fieldLists.find((item) => item.fields.includes("交通流量")) || fieldLists.find((item) => item.fields.some((field) => requiredFields.includes(field)));
+    const queryField = carrier.fields.find((field) => requiredFields.includes(field));
+    const candidates = await post("/api/字段候选值", { "事件类型": carrier.eventType, "字段": queryField });
     const simulatedQuery = await post("/api/知识图谱查询", {
-      "事件类型": "偷渡",
-      "筛选条件": { "交通流量": candidates["候选值"][0]["值"] },
+      "事件类型": carrier.eventType,
+      "筛选条件": { [queryField]: candidates["候选值"][0]["值"] },
     });
     const blacklist = await get("/api/黑名单图谱");
     const fullResponse = await fetch("/api/全量知识图谱下载");
@@ -40,7 +48,11 @@ async function main() {
     fullResponse.body?.cancel();
 
     return {
-      hasSimulatedField: fields["可筛选字段"].includes("交通流量"),
+      pageFieldCheck: { eventType: carrier.eventType, field: queryField },
+      maxRequirementFieldsPerType: Math.max(...fieldLists.map((item) => item.fields.filter((field) => requiredFields.includes(field)).length)),
+      typesWithAllRequirementFields: fieldLists.filter((item) => requiredFields.every((field) => item.fields.includes(field))).length,
+      hasAnyRequirementField: fieldLists.some((item) => item.fields.some((field) => requiredFields.includes(field))),
+      hasSimulatedField: Boolean(queryField),
       simulatedCandidateCount: candidates["候选值"].length,
       simulatedQueryEvents: simulatedQuery["命中事件数"],
       blacklistNodes: blacklist["节点数"],
@@ -55,11 +67,33 @@ async function main() {
     timeout: 30000,
   });
   const pageChecks = await page.evaluate(() => ({
+    titleRemoved: !document.body.textContent.includes("导出与专题图谱"),
     metricType: document.querySelector("#metricType")?.textContent,
     graphInfo: document.querySelector("#graphInfo")?.textContent || "",
   }));
 
-  console.log(JSON.stringify({ ...apiChecks, ...pageChecks, errors }, null, 2));
+  const [blacklistDownload] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30000 }),
+    page.click("#blacklistDownloadButton"),
+  ]);
+  const [fullDownload] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30000 }),
+    page.click("#fullExportButton"),
+  ]);
+
+  console.log(
+    JSON.stringify(
+      {
+        ...apiChecks,
+        ...pageChecks,
+        blacklistDownloadName: blacklistDownload.suggestedFilename(),
+        fullDownloadName: fullDownload.suggestedFilename(),
+        errors,
+      },
+      null,
+      2
+    )
+  );
   await browser.close();
 }
 

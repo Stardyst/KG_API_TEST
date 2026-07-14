@@ -227,33 +227,31 @@ class GraphStore:
             return
 
         for event_type in self.event_types():
-            for field_config in field_configs:
-                field = field_config.get("字段")
-                if not field:
-                    continue
-                self.event_type_field_set[event_type].add(field)
-                if field not in self.event_type_fields.setdefault(event_type, []):
-                    self.event_type_fields[event_type].append(field)
-
             event_ids = sorted(self.events_by_type[event_type])
             for event_index, event_id in enumerate(event_ids):
                 for field_index, field_config in enumerate(field_configs):
+                    field = field_config.get("字段")
+                    if not field:
+                        continue
                     if not self.should_attach_simulated_field(event_type, event_index, field_index):
                         continue
                     values = field_config.get("候选值", [])
                     if not values:
                         continue
+                    self.event_type_field_set[event_type].add(field)
+                    if field not in self.event_type_fields.setdefault(event_type, []):
+                        self.event_type_fields[event_type].append(field)
                     value = values[(event_index + field_index) % len(values)]
                     entity_id = f"entity_req_{self.safe_id(event_id)}_{field_index}"
                     self.nodes[entity_id] = {
                         "id": entity_id,
                         "name": value,
                         "ontoid": "",
-                        "ontName": field_config["字段"],
+                        "ontName": field,
                         "description": "",
                         "labels": ["Entity"],
                         "properties": {
-                            "entity_type": field_config["字段"],
+                            "entity_type": field,
                             "text": value,
                         },
                     }
@@ -282,7 +280,7 @@ class GraphStore:
         elif "超速" in event_type or "徘徊" in event_type or "入侵" in event_type:
             preferred = {6, 7, 8, 9, 10, 11}
         else:
-            preferred = set(range(14))
+            preferred = set()
         return field_index in preferred and (event_index + field_index) % 7 == 0
 
     def build_blacklist_entries(self) -> List[Dict[str, Any]]:

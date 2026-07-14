@@ -19,6 +19,7 @@ async function main() {
   await page.waitForSelector(".filter-row .filter-field", { timeout: 30000 });
 
   const scenario = await page.evaluate(async () => {
+    const requirementFields = new Set(["船东", "船舶管理公司人员", "船舶驾引人员", "船上乘客", "工程船", "交通流量", "交通流分布", "气象", "水文", "港口", "航道", "锚地", "渔区", "地方条例"]);
     async function post(path, body = {}) {
       const response = await fetch(path, {
         method: "POST",
@@ -31,19 +32,23 @@ async function main() {
     const eventTypes = (await post("/api/事件类型列表"))["事件类型列表"];
     for (const eventType of eventTypes) {
       const fields = (await post("/api/可筛选字段", { "事件类型": eventType }))["可筛选字段"];
-      const candidatesByField = [];
+      let candidatesByField = [];
       for (const field of fields) {
         const candidates = (await post("/api/字段候选值", { "事件类型": eventType, "字段": field }))["候选值"];
         if (candidates.length > 0) candidatesByField.push({ field, candidates });
-        if (candidatesByField.length >= 2) {
-          return {
-            eventType,
-            firstField: candidatesByField[0].field,
-            firstValue: candidatesByField[0].candidates[0]["值"],
-            secondField: candidatesByField[1].field,
-            secondValue: candidatesByField[1].candidates[0]["值"],
-          };
-        }
+      }
+      const requirementCandidates = candidatesByField.filter((item) => requirementFields.has(item.field));
+      if (requirementCandidates.length >= 2) {
+        candidatesByField = requirementCandidates;
+      }
+      if (candidatesByField.length >= 2) {
+        return {
+          eventType,
+          firstField: candidatesByField[0].field,
+          firstValue: candidatesByField[0].candidates[0]["值"],
+          secondField: candidatesByField[1].field,
+          secondValue: candidatesByField[1].candidates[0]["值"],
+        };
       }
     }
     return null;
@@ -84,7 +89,6 @@ async function main() {
   await page.click(".filter-row .filter-value");
   await page.waitForTimeout(500);
   const requestCountAfterFocus = candidateRequestCount;
-
   const result = await page.evaluate((expectedSecondValue) => {
     const input = document.querySelector(".filter-row .filter-value");
     const listId = input.getAttribute("list");
@@ -100,12 +104,30 @@ async function main() {
     };
   }, scenario.secondValue);
 
+  await page.selectOption(".filter-row .filter-field", scenario.firstField);
+  await page.waitForFunction(
+    (expected) => {
+      const input = document.querySelector(".filter-row .filter-value");
+      const datalist = document.getElementById(input.getAttribute("list"));
+      return input.value === "" && Array.from(datalist?.querySelectorAll("option") || []).some((option) => option.value === expected);
+    },
+    scenario.firstValue,
+    { timeout: 30000 }
+  );
+  const switchedBack = await page.evaluate((expectedFirstValue) => {
+    const input = document.querySelector(".filter-row .filter-value");
+    const datalist = document.getElementById(input.getAttribute("list"));
+    const options = Array.from(datalist?.querySelectorAll("option") || []).map((option) => option.value);
+    return input.value === "" && options.includes(expectedFirstValue);
+  }, scenario.firstValue);
+
   console.log(
     JSON.stringify(
       {
         scenario,
         ...result,
         focusDidNotReloadCandidates: requestCountAfterFocus === requestCountBeforeFocus,
+        switchedBack,
         requestCountBeforeFocus,
         requestCountAfterFocus,
         errors,

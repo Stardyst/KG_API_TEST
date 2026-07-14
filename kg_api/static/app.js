@@ -69,6 +69,12 @@ function addFilterRow() {
     valueInput.value = "";
     await refreshCandidatesForRow(row);
   });
+  valueInput.addEventListener("pointerdown", () => {
+    refreshCandidatesForRow(row, { force: false });
+  });
+  valueInput.addEventListener("focus", () => {
+    refreshCandidatesForRow(row, { force: false });
+  });
   row.querySelector(".remove-filter").addEventListener("click", () => {
     row.remove();
   });
@@ -78,14 +84,22 @@ function addFilterRow() {
   }
 }
 
-async function refreshCandidatesForRow(row) {
+async function refreshCandidatesForRow(row, options = {}) {
   const field = row.querySelector(".filter-field")?.value;
+  const valueInput = row.querySelector(".filter-value");
   if (!field) {
     renderCandidatesForRow(row, []);
     return;
   }
+  if (!options.force && row.dataset.loadedCandidateField === field) {
+    return;
+  }
   const requestToken = `${Date.now()}-${Math.random()}`;
   row.dataset.candidateRequestToken = requestToken;
+  row.dataset.loadingCandidateField = field;
+  if (valueInput) {
+    valueInput.placeholder = "正在加载候选值";
+  }
   renderCandidatesForRow(row, []);
   await loadCandidates(field, row, requestToken);
 }
@@ -96,9 +110,16 @@ async function loadCandidates(field, row, requestToken) {
     const data = await apiPost("/api/字段候选值", { "事件类型": eventType, "字段": field });
     if (!isLatestCandidateRequest(row, requestToken, eventType)) return;
     renderCandidatesForRow(row, data["候选值"].slice(0, 80));
+    row.dataset.loadedCandidateField = field;
   } catch {
     if (!isLatestCandidateRequest(row, requestToken, eventType)) return;
     renderCandidatesForRow(row, []);
+  } finally {
+    if (row.dataset.candidateRequestToken === requestToken) {
+      row.dataset.loadingCandidateField = "";
+      const valueInput = row.querySelector(".filter-value");
+      if (valueInput) valueInput.placeholder = "输入筛选值，支持包含匹配";
+    }
   }
 }
 
